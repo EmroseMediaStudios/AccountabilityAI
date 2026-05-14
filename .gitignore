@@ -1,0 +1,11 @@
+# Tangle AI
+
+venv/
+__pycache__/
+*.pyc
+backend/data/
+logs/
+*.log
+.env
+*.db
+*.sqlite3
