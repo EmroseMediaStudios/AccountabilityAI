@@ -881,9 +881,13 @@
                 const res = await fetch(`${API}/chat`, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
                 const data = await res.json();
                 if (handleExpiry(data)) { sending = false; return; }
-                await new Promise(r => setTimeout(r, Math.min(data.typing_delay_ms || 1500, 4000)));
-                typingEl.classList.remove('visible');
-                addMessage('assistant', data.response);
+                if (data.silent) {
+                    typingEl.classList.remove('visible');
+                } else {
+                    await new Promise(r => setTimeout(r, Math.min(data.typing_delay_ms || 1500, 4000)));
+                    typingEl.classList.remove('visible');
+                    if (data.response) addMessage('assistant', data.response);
+                }
                 if (data.state) updateStatus(data.state);
             } catch {
                 typingEl.classList.remove('visible');

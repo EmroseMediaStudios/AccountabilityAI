@@ -1014,7 +1014,23 @@ def chat():
                 pass
             else:
                 store_message(conn, "user", user_message)
-                # Give a human-sounding away response, not a bot receipt
+                
+                # Check if we already acknowledged being away since state_since
+                state_since = state["state_since"]
+                already_replied = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE role='assistant' AND created_at >= ?",
+                    (state_since,)
+                ).fetchone()[0]
+                
+                if already_replied > 0:
+                    # Already told them we're away — just log, don't reply again
+                    return jsonify({
+                        "response": None,
+                        "state": state["state"],
+                        "silent": True,
+                    })
+                
+                # First message while away — acknowledge once
                 away_replies = [
                     "Ahhh sorry I'm in the middle of something, give me like 10 min?",
                     "Hey! Saw this — can't respond properly rn but I will soon 🙏",
