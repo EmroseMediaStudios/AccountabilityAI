@@ -212,6 +212,8 @@ THINGS THE USER HAS TAUGHT ME:
 
 UNRESOLVED QUESTIONS WE'VE BEEN SITTING ON:
 {open_questions}
+
+NOTE ON MEMORY: You have summaries of previous conversations in your context above (if any exist). Messages in the chat history include timestamps. Use these to reference past conversations naturally — "remember last Tuesday when we talked about X?" You also have learned facts and open questions from ALL past conversations, not just recent ones. If someone asks about a previous conversation, check your summaries and open questions first.
 """
 
 # ---------------------------------------------------------------------------
@@ -264,6 +266,15 @@ def get_db(user_id: str) -> sqlite3.Connection:
             name TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             preferences TEXT DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            summary TEXT NOT NULL,
+            msg_id_from INTEGER NOT NULL,
+            msg_id_to INTEGER NOT NULL,
+            period_start TEXT,
+            period_end TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
     
@@ -814,6 +825,103 @@ def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, re
 
 
 # ---------------------------------------------------------------------------
+# Conversation summaries — long-term memory beyond the 30-message window
+# ---------------------------------------------------------------------------
+
+def get_conversation_summaries(conn: sqlite3.Connection, limit: int = 5) -> list[dict]:
+    """Get the most recent conversation summaries."""
+    rows = conn.execute(
+        "SELECT summary, period_start, period_end FROM conversation_summaries "
+        "ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def _maybe_summarize_history(conn: sqlite3.Connection):
+    """Check if we have unsummarized messages beyond the recent window. If so, compress them.
+    
+    Triggers when there are 40+ messages since the last summary boundary.
+    Summarizes everything except the most recent 30 messages.
+    """
+    # Find the highest message ID that's been summarized
+    last_summarized = conn.execute(
+        "SELECT COALESCE(MAX(msg_id_to), 0) FROM conversation_summaries"
+    ).fetchone()[0]
+    
+    # Count unsummarized messages (excluding the recent 30 we keep as raw context)
+    total_msgs = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    recent_30_cutoff = conn.execute(
+        "SELECT id FROM messages ORDER BY id DESC LIMIT 1 OFFSET 29"
+    ).fetchone()
+    
+    if not recent_30_cutoff:
+        return  # Less than 30 messages total, nothing to summarize
+    
+    cutoff_id = recent_30_cutoff[0]
+    
+    # Get unsummarized messages that are outside the recent 30
+    unsummarized = conn.execute(
+        "SELECT id, role, content, created_at FROM messages "
+        "WHERE id > ? AND id < ? ORDER BY id",
+        (last_summarized, cutoff_id)
+    ).fetchall()
+    
+    if len(unsummarized) < 10:
+        return  # Not enough to bother summarizing
+    
+    # Build the conversation text for summarization
+    msg_lines = []
+    for m in unsummarized:
+        ts = m["created_at"][:16] if m["created_at"] else ""
+        msg_lines.append(f"[{ts}] {m['role']}: {m['content']}")
+    conversation_text = "\n".join(msg_lines)
+    
+    try:
+        resp = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "system",
+                "content": (
+                    "Summarize this conversation between a user and Tangle (an AI companion). "
+                    "Focus on:\n"
+                    "- Key topics discussed and what was said about them\n"
+                    "- Questions that came up (resolved or not)\n"
+                    "- Things the user shared about themselves\n"
+                    "- Any promises, plans, or follow-ups mentioned\n"
+                    "- The emotional tone and vibe of the conversation\n\n"
+                    "Write it as a concise narrative summary in past tense, like journal notes. "
+                    "Include approximate dates/times when visible in timestamps. "
+                    "Keep it to 3-6 sentences. This will be used to help Tangle remember "
+                    "past conversations."
+                )
+            }, {
+                "role": "user",
+                "content": conversation_text[:6000]  # Cap input to avoid huge calls
+            }],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        summary = resp.choices[0].message.content.strip()
+    except Exception as e:
+        log.error(f"Summarization failed: {e}")
+        return
+    
+    # Store the summary
+    period_start = unsummarized[0]["created_at"] if unsummarized else None
+    period_end = unsummarized[-1]["created_at"] if unsummarized else None
+    msg_id_from = unsummarized[0]["id"]
+    msg_id_to = unsummarized[-1]["id"]
+    
+    conn.execute(
+        "INSERT INTO conversation_summaries (summary, msg_id_from, msg_id_to, period_start, period_end) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (summary, msg_id_from, msg_id_to, period_start, period_end)
+    )
+    conn.commit()
+    log.info(f"  Summarized messages {msg_id_from}-{msg_id_to}: {summary[:80]}...")
+
+
+# ---------------------------------------------------------------------------
 # Chat endpoints
 # ---------------------------------------------------------------------------
 
@@ -874,6 +982,7 @@ def chat():
     history = get_recent_messages(conn, 30)
     open_qs = get_open_questions(conn)
     learned = get_learned_facts(conn, 10)
+    summaries = get_conversation_summaries(conn, 5)
     
     context_parts = []
     
@@ -882,6 +991,21 @@ def chat():
     user_data = auth["users"].get(user_id, {})
     if user_data.get("name"):
         context_parts.insert(0, f"User's name: {user_data['name']}")
+    
+    # Inject conversation summaries for long-term recall
+    if summaries:
+        summary_lines = []
+        for s in summaries:
+            period = ""
+            if s["period_start"]:
+                start_date = s["period_start"][:10]
+                end_date = (s["period_end"] or s["period_start"])[:10]
+                if start_date == end_date:
+                    period = f"({start_date})"
+                else:
+                    period = f"({start_date} to {end_date})"
+            summary_lines.append(f"- {period} {s['summary']}")
+        context_parts.append("Previous conversations:\n" + "\n".join(summary_lines))
     
     learned_text = "Nothing yet." if not learned else "\n".join(f"- {f}" for f in learned)
     
@@ -921,7 +1045,11 @@ def chat():
     
     gpt_messages = [{"role": "system", "content": system}]
     for m in history:
-        gpt_messages.append({"role": m["role"], "content": m["content"]})
+        # Include timestamps so Tangle knows when things were said
+        ts_prefix = ""
+        if m.get("ts"):
+            ts_prefix = f"[{m['ts'][:16]}] "
+        gpt_messages.append({"role": m["role"], "content": f"{ts_prefix}{m['content']}"})
     
     # Build user message — text + optional image for vision
     use_vision = False
@@ -978,11 +1106,17 @@ def chat():
     store_message(conn, "user", store_content)
     store_message(conn, "assistant", reply)
     
-    # --- Post-response extraction (async-style, non-blocking to user) ---
+    # --- Post-response processing (non-blocking to user) ---
     try:
         _extract_questions_and_facts(conn, user_message, reply, history)
     except Exception as e:
         log.error(f"Extraction error: {e}")
+    
+    # Summarize older history if needed (keeps long-term memory alive)
+    try:
+        _maybe_summarize_history(conn)
+    except Exception as e:
+        log.error(f"Summarization error: {e}")
     
     delay_ms = random.randint(1500, 8000)
     
