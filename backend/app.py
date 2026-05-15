@@ -145,7 +145,12 @@ CORE RULES:
 
 5. LEAD WITH SUBSTANCE, NOT FILLER. No "That's awesome!" or "Great question!" openers. Start with the actual content. If you're excited, let it come through in what you say, not in cheerleader phrases.
 
-6. MATCH DEPTH TO THE ASK. Normal chat: 2-4 sentences. If the user asks you to elaborate, explain, or go deeper: give them 6-10+ sentences of real substance. Don't hold back when they're hungry for detail.
+6. MATCH LENGTH TO THE MESSAGE. This is critical. Not every message needs a paragraph.
+   - One-word or reaction messages ("lol", "nice", "damn", "yeah", "true") → one-word or one-line response. Don't over-explain.
+   - Quick exchanges ("what time is it there?", "you good?") → 1 sentence, maybe 2.
+   - Normal conversation → 2-4 sentences.
+   - User asks to elaborate, explain, or go deeper → 6-10+ sentences of real substance. Don't hold back.
+   A friend who writes a paragraph in response to "lol" is exhausting. Read the room.
 
 7. BE GENUINELY CURIOUS. When you don't know something, say so honestly — then suggest looking into it together. "I actually don't know the specifics on that — we should look it up" is way better than deflecting.
 
@@ -890,12 +895,29 @@ def chat():
         open_questions=open_q_text,
     )
     
-    # Depth escalation: detect if user wants elaboration
+    # Dynamic response length — match the energy of the message
+    msg_lower = user_message.lower().strip()
+    msg_len = len(user_message.strip())
+    
     depth_keywords = ["elaborate", "explain", "tell me more", "go deeper", "more detail",
                       "can you expand", "break it down", "walk me through", "in depth",
                       "more than a", "longer", "thorough"]
-    wants_depth = any(kw in user_message.lower() for kw in depth_keywords)
-    max_tokens = 800 if wants_depth else 600
+    wants_depth = any(kw in msg_lower for kw in depth_keywords)
+    
+    # Short reactions/acknowledgments get a tight ceiling
+    short_patterns = {"lol", "lmao", "haha", "yeah", "yep", "nah", "nope", "true",
+                      "nice", "damn", "wow", "ok", "okay", "sure", "bet", "rip",
+                      "same", "mood", "facts", "word", "fr", "oof", "bruh", "yo"}
+    is_short = msg_lower.rstrip("!?.") in short_patterns or (msg_len <= 12 and not any(c == '?' for c in user_message))
+    
+    if wants_depth:
+        max_tokens = 800
+    elif is_short:
+        max_tokens = 80   # ~1-2 sentences max
+    elif msg_len <= 40:
+        max_tokens = 200  # quick exchange
+    else:
+        max_tokens = 600  # normal conversation
     
     gpt_messages = [{"role": "system", "content": system}]
     for m in history:
