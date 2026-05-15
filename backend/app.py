@@ -424,8 +424,6 @@ def register():
     username = data.get("username", "").strip().lower()
     password = data.get("password", "").strip()
     display_name = data.get("name", "").strip()
-    invite_code = data.get("invite_code", "").strip()
-    
     if not username or not password or not display_name:
         return jsonify({"error": "Need username, password, and display name"}), 400
     
@@ -439,17 +437,6 @@ def register():
         return jsonify({"error": "Password must be at least 6 characters"}), 400
     
     auth = load_auth()
-    
-    # Check invite code if required
-    invite_required = auth.get("require_invite", True)
-    if invite_required:
-        if not invite_code:
-            return jsonify({"error": "Invite code required"}), 400
-        if invite_code not in auth["invite_codes"]:
-            return jsonify({"error": "Invalid invite code"}), 403
-        code_data = auth["invite_codes"][invite_code]
-        if code_data.get("max_uses") and code_data["uses"] >= code_data["max_uses"]:
-            return jsonify({"error": "Invite code exhausted"}), 403
     
     # Check username uniqueness
     for uid, udata in auth["users"].items():
@@ -467,10 +454,7 @@ def register():
         "token": token,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_login": datetime.now(timezone.utc).isoformat(),
-        "invite_code": invite_code or None,
     }
-    if invite_code and invite_code in auth["invite_codes"]:
-        auth["invite_codes"][invite_code]["uses"] += 1
     save_auth(auth)
     
     session["user_id"] = user_id
