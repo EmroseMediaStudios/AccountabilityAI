@@ -8,6 +8,7 @@ import json
 import random
 import sqlite3
 import hashlib
+import base64
 import secrets
 import logging
 from datetime import datetime, timezone, timedelta
@@ -16,6 +17,7 @@ from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, session, redirect
 from flask_cors import CORS
 from openai import OpenAI
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # ---------------------------------------------------------------------------
 # Config
@@ -24,6 +26,8 @@ BASE_DIR = Path(__file__).parent
 DB_DIR = BASE_DIR / "data"
 DB_DIR.mkdir(exist_ok=True)
 STATIC_DIR = BASE_DIR.parent / "frontend" / "dist"
+UPLOADS_DIR = BASE_DIR / "data" / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_FILE = DB_DIR / "auth.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [tangle] %(message)s")
@@ -38,6 +42,34 @@ openai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # ---------------------------------------------------------------------------
 # Auth — simple invite code system
 # ---------------------------------------------------------------------------
+
+ADMIN_TOKEN = os.environ.get("TANGLE_ADMIN_TOKEN", "")
+
+
+def require_admin(f):
+    """Decorator to require admin auth (env token or user admin flag)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Check bearer token against TANGLE_ADMIN_TOKEN
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        if ADMIN_TOKEN and token == ADMIN_TOKEN:
+            return f(*args, **kwargs)
+        # Check if authenticated user is admin
+        user_id = session.get("user_id") or request.headers.get("X-User-ID")
+        if not user_id and token:
+            auth = load_auth()
+            for uid, udata in auth["users"].items():
+                if udata.get("token") == token:
+                    user_id = uid
+                    break
+        if user_id:
+            auth = load_auth()
+            user = auth["users"].get(user_id, {})
+            if user.get("is_admin"):
+                return f(*args, **kwargs)
+        return jsonify({"error": "Admin access required"}), 403
+    return decorated
+
 
 def load_auth() -> dict:
     """Load auth config (invite codes + registered users)."""
@@ -70,6 +102,18 @@ def require_auth(f):
             auth = load_auth()
             for uid, udata in auth["users"].items():
                 if udata.get("token") == token:
+                    # Check token age — expire after 7 days
+                    last_login = udata.get("last_login")
+                    if last_login:
+                        try:
+                            login_time = datetime.fromisoformat(last_login)
+                            if login_time.tzinfo is None:
+                                login_time = login_time.replace(tzinfo=timezone.utc)
+                            age = datetime.now(timezone.utc) - login_time
+                            if age > timedelta(days=7):
+                                return jsonify({"error": "Session expired", "needsAuth": True}), 401
+                        except (ValueError, TypeError):
+                            pass
                     user_id = uid
                     break
         
@@ -313,46 +357,169 @@ def maybe_transition_state(conn: sqlite3.Connection) -> str | None:
 # Auth endpoints
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Auto-migration for known legacy users
+# Maps username → legacy user_id to migrate on registration
+# ---------------------------------------------------------------------------
+PENDING_MIGRATIONS = {
+    "kid_psychotic": "user_0564a7a2bd53e6b9",  # Drew's main account (64 msgs, 17 facts)
+}
+
+
+def _auto_migrate(username: str, new_user_id: str):
+    """If this username has a pending migration, move data from the legacy account."""
+    legacy_id = PENDING_MIGRATIONS.get(username)
+    if not legacy_id:
+        return
+    
+    auth = load_auth()
+    if legacy_id not in auth["users"]:
+        log.info(f"Auto-migrate: legacy {legacy_id} not found, skipping")
+        return
+    
+    try:
+        src_conn = get_db(legacy_id)
+        dst_conn = get_db(new_user_id)
+        
+        migrated = {"messages": 0, "learned_facts": 0, "open_questions": 0}
+        
+        for row in src_conn.execute("SELECT role, content, created_at, delivered FROM messages ORDER BY id").fetchall():
+            dst_conn.execute(
+                "INSERT INTO messages (role, content, created_at, delivered) VALUES (?, ?, ?, ?)",
+                (row["role"], row["content"], row["created_at"], row["delivered"])
+            )
+            migrated["messages"] += 1
+        
+        for row in src_conn.execute("SELECT fact, taught_by_user, source, created_at FROM learned_facts ORDER BY id").fetchall():
+            dst_conn.execute(
+                "INSERT INTO learned_facts (fact, taught_by_user, source, created_at) VALUES (?, ?, ?, ?)",
+                (row["fact"], row["taught_by_user"], row["source"], row["created_at"])
+            )
+            migrated["learned_facts"] += 1
+        
+        for row in src_conn.execute(
+            "SELECT question, context, created_at, resolved_at, resolution, nudge_count, last_nudge_at "
+            "FROM open_questions ORDER BY id"
+        ).fetchall():
+            dst_conn.execute(
+                "INSERT INTO open_questions (question, context, created_at, resolved_at, resolution, nudge_count, last_nudge_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (row["question"], row["context"], row["created_at"], row["resolved_at"],
+                 row["resolution"], row["nudge_count"], row["last_nudge_at"])
+            )
+            migrated["open_questions"] += 1
+        
+        dst_conn.commit()
+        src_conn.close()
+        dst_conn.close()
+        
+        log.info(f"Auto-migrate: {legacy_id} → {new_user_id} (@{username}): {migrated}")
+    except Exception as e:
+        log.error(f"Auto-migrate error for {username}: {e}")
+
+
 @app.route("/api/register", methods=["POST"])
 def register():
     data = request.json or {}
-    invite_code = data.get("invite_code", "").strip()
+    username = data.get("username", "").strip().lower()
+    password = data.get("password", "").strip()
     display_name = data.get("name", "").strip()
+    invite_code = data.get("invite_code", "").strip()
     
-    if not invite_code or not display_name:
-        return jsonify({"error": "Need invite code and name"}), 400
+    if not username or not password or not display_name:
+        return jsonify({"error": "Need username, password, and display name"}), 400
+    
+    if len(username) < 3 or len(username) > 32:
+        return jsonify({"error": "Username must be 3-32 characters"}), 400
+    
+    if not username.replace("_", "").replace("-", "").isalnum():
+        return jsonify({"error": "Username: letters, numbers, hyphens, underscores only"}), 400
+    
+    if len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
     
     auth = load_auth()
     
-    if invite_code not in auth["invite_codes"]:
-        return jsonify({"error": "Invalid invite code"}), 403
+    # Check invite code if required
+    invite_required = auth.get("require_invite", True)
+    if invite_required:
+        if not invite_code:
+            return jsonify({"error": "Invite code required"}), 400
+        if invite_code not in auth["invite_codes"]:
+            return jsonify({"error": "Invalid invite code"}), 403
+        code_data = auth["invite_codes"][invite_code]
+        if code_data.get("max_uses") and code_data["uses"] >= code_data["max_uses"]:
+            return jsonify({"error": "Invite code exhausted"}), 403
     
-    code_data = auth["invite_codes"][invite_code]
-    if code_data.get("max_uses") and code_data["uses"] >= code_data["max_uses"]:
-        return jsonify({"error": "Invite code exhausted"}), 403
+    # Check username uniqueness
+    for uid, udata in auth["users"].items():
+        if udata.get("username", "").lower() == username:
+            return jsonify({"error": "Username already taken"}), 409
     
     # Create user
     user_id = f"user_{secrets.token_hex(8)}"
     token = secrets.token_hex(32)
     
     auth["users"][user_id] = {
+        "username": username,
+        "password_hash": generate_password_hash(password),
         "name": display_name,
         "token": token,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "invite_code": invite_code,
+        "last_login": datetime.now(timezone.utc).isoformat(),
+        "invite_code": invite_code or None,
     }
-    auth["invite_codes"][invite_code]["uses"] += 1
+    if invite_code and invite_code in auth["invite_codes"]:
+        auth["invite_codes"][invite_code]["uses"] += 1
     save_auth(auth)
     
     session["user_id"] = user_id
     
-    log.info(f"New user registered: {display_name} ({user_id})")
+    log.info(f"New user registered: {display_name} @{username} ({user_id})")
+    
+    # --- Auto-migrate pending accounts ---
+    _auto_migrate(username, user_id)
     
     return jsonify({
         "user_id": user_id,
         "token": token,
         "name": display_name,
     })
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.json or {}
+    username = data.get("username", "").strip().lower()
+    password = data.get("password", "").strip()
+    
+    if not username or not password:
+        return jsonify({"error": "Need username and password"}), 400
+    
+    auth = load_auth()
+    
+    for uid, udata in auth["users"].items():
+        if udata.get("username", "").lower() == username:
+            pw_hash = udata.get("password_hash", "")
+            if not pw_hash:
+                return jsonify({"error": "Account needs password reset — contact admin"}), 403
+            if check_password_hash(pw_hash, password):
+                # Rotate token on login
+                new_token = secrets.token_hex(32)
+                auth["users"][uid]["token"] = new_token
+                auth["users"][uid]["last_login"] = datetime.now(timezone.utc).isoformat()
+                save_auth(auth)
+                session["user_id"] = uid
+                log.info(f"Login: {udata.get('name', username)} @{username} ({uid})")
+                return jsonify({
+                    "user_id": uid,
+                    "token": new_token,
+                    "name": udata.get("name", username),
+                })
+            else:
+                return jsonify({"error": "Wrong password"}), 401
+    
+    return jsonify({"error": "User not found"}), 404
 
 
 @app.route("/api/auth/check", methods=["GET"])
@@ -364,15 +531,184 @@ def auth_check():
         auth = load_auth()
         for uid, udata in auth["users"].items():
             if udata.get("token") == token:
+                # Check token age — expire after 7 days
+                last_login = udata.get("last_login")
+                if last_login:
+                    try:
+                        login_time = datetime.fromisoformat(last_login)
+                        if login_time.tzinfo is None:
+                            login_time = login_time.replace(tzinfo=timezone.utc)
+                        age = datetime.now(timezone.utc) - login_time
+                        if age > timedelta(days=7):
+                            return jsonify({"authenticated": False, "needsAuth": True, "reason": "expired"})
+                    except (ValueError, TypeError):
+                        pass
                 user_id = uid
                 break
     
     if user_id:
         auth = load_auth()
         user = auth["users"].get(user_id, {})
-        return jsonify({"authenticated": True, "user_id": user_id, "name": user.get("name", "")})
+        return jsonify({
+            "authenticated": True,
+            "user_id": user_id,
+            "name": user.get("name", ""),
+            "username": user.get("username", ""),
+            "is_admin": user.get("is_admin", False),
+        })
     
     return jsonify({"authenticated": False})
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/admin/users", methods=["GET"])
+@require_admin
+def admin_list_users():
+    """List all users with their metadata (no password hashes)."""
+    auth = load_auth()
+    users = []
+    for uid, udata in auth["users"].items():
+        # Get message count from their DB
+        try:
+            conn = get_db(uid)
+            msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            fact_count = conn.execute("SELECT COUNT(*) FROM learned_facts").fetchone()[0]
+            conn.close()
+        except Exception:
+            msg_count = 0
+            fact_count = 0
+        
+        users.append({
+            "user_id": uid,
+            "username": udata.get("username", ""),
+            "name": udata.get("name", ""),
+            "created_at": udata.get("created_at", ""),
+            "invite_code": udata.get("invite_code", ""),
+            "is_admin": udata.get("is_admin", False),
+            "has_password": bool(udata.get("password_hash")),
+            "message_count": msg_count,
+            "fact_count": fact_count,
+        })
+    return jsonify({"users": users})
+
+
+@app.route("/api/admin/migrate", methods=["POST"])
+@require_admin
+def admin_migrate_user():
+    """Migrate all data from one user account to another.
+    
+    Use case: Drew signed up with invite code (legacy), then registers
+    with username/password. Admin moves his conversation history to the
+    new account.
+    
+    Body: {"from_user_id": "user_xxx", "to_user_id": "user_yyy", "delete_source": false}
+    """
+    data = request.json or {}
+    from_id = data.get("from_user_id", "").strip()
+    to_id = data.get("to_user_id", "").strip()
+    delete_source = data.get("delete_source", False)
+    
+    if not from_id or not to_id:
+        return jsonify({"error": "Need from_user_id and to_user_id"}), 400
+    
+    if from_id == to_id:
+        return jsonify({"error": "Source and target are the same"}), 400
+    
+    auth = load_auth()
+    if from_id not in auth["users"]:
+        return jsonify({"error": f"Source user {from_id} not found"}), 404
+    if to_id not in auth["users"]:
+        return jsonify({"error": f"Target user {to_id} not found"}), 404
+    
+    try:
+        src_conn = get_db(from_id)
+        dst_conn = get_db(to_id)
+        
+        migrated = {"messages": 0, "learned_facts": 0, "open_questions": 0}
+        
+        # Migrate messages
+        rows = src_conn.execute("SELECT role, content, created_at, delivered FROM messages ORDER BY id").fetchall()
+        for r in rows:
+            dst_conn.execute(
+                "INSERT INTO messages (role, content, created_at, delivered) VALUES (?, ?, ?, ?)",
+                (r["role"], r["content"], r["created_at"], r["delivered"])
+            )
+            migrated["messages"] += 1
+        
+        # Migrate learned facts
+        rows = src_conn.execute("SELECT fact, taught_by_user, source, created_at FROM learned_facts ORDER BY id").fetchall()
+        for r in rows:
+            dst_conn.execute(
+                "INSERT INTO learned_facts (fact, taught_by_user, source, created_at) VALUES (?, ?, ?, ?)",
+                (r["fact"], r["taught_by_user"], r["source"], r["created_at"])
+            )
+            migrated["learned_facts"] += 1
+        
+        # Migrate open questions
+        rows = src_conn.execute(
+            "SELECT question, context, created_at, resolved_at, resolution, nudge_count, last_nudge_at "
+            "FROM open_questions ORDER BY id"
+        ).fetchall()
+        for r in rows:
+            dst_conn.execute(
+                "INSERT INTO open_questions (question, context, created_at, resolved_at, resolution, nudge_count, last_nudge_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (r["question"], r["context"], r["created_at"], r["resolved_at"],
+                 r["resolution"], r["nudge_count"], r["last_nudge_at"])
+            )
+            migrated["open_questions"] += 1
+        
+        # Copy user_profile preferences if target doesn't have custom ones
+        src_profile = src_conn.execute("SELECT timezone, name, preferences FROM user_profile WHERE id=1").fetchone()
+        if src_profile and src_profile["name"]:
+            dst_conn.execute(
+                "UPDATE user_profile SET timezone=?, name=?, preferences=? WHERE id=1",
+                (src_profile["timezone"], src_profile["name"], src_profile["preferences"])
+            )
+        
+        dst_conn.commit()
+        
+        # Optionally delete source
+        if delete_source:
+            safe_id = hashlib.sha256(from_id.encode()).hexdigest()[:16]
+            db_path = DB_DIR / f"{safe_id}.db"
+            src_conn.close()
+            if db_path.exists():
+                db_path.unlink()
+            del auth["users"][from_id]
+            save_auth(auth)
+            log.info(f"Admin: Migrated + deleted {from_id} → {to_id}: {migrated}")
+        else:
+            src_conn.close()
+            log.info(f"Admin: Migrated {from_id} → {to_id}: {migrated}")
+        
+        dst_conn.close()
+        
+        return jsonify({"success": True, "migrated": migrated, "source_deleted": delete_source})
+    except Exception as e:
+        log.error(f"Migration error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/set-admin", methods=["POST"])
+@require_admin
+def admin_set_admin():
+    """Set or remove admin flag on a user."""
+    data = request.json or {}
+    target_id = data.get("user_id", "").strip()
+    is_admin = data.get("is_admin", True)
+    
+    auth = load_auth()
+    if target_id not in auth["users"]:
+        return jsonify({"error": "User not found"}), 404
+    
+    auth["users"][target_id]["is_admin"] = is_admin
+    save_auth(auth)
+    log.info(f"Admin: Set admin={is_admin} for {target_id}")
+    return jsonify({"success": True})
 
 
 # ---------------------------------------------------------------------------
@@ -453,9 +789,10 @@ def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, re
 def chat():
     data = request.json or {}
     user_message = data.get("message", "").strip()
+    image_url = data.get("image_url", "").strip()  # relative URL from upload
     user_id = request.user_id
     
-    if not user_message:
+    if not user_message and not image_url:
         return jsonify({"error": "No message provided"}), 400
     
     conn = get_db(user_id)
@@ -535,11 +872,46 @@ def chat():
     gpt_messages = [{"role": "system", "content": system}]
     for m in history:
         gpt_messages.append({"role": m["role"], "content": m["content"]})
-    gpt_messages.append({"role": "user", "content": user_message})
+    
+    # Build user message — text + optional image for vision
+    use_vision = False
+    if image_url:
+        use_vision = True
+        # Read image as base64 for GPT-4o vision
+        img_parts = image_url.lstrip("/").split("/")  # api/uploads/<uid>/<file>
+        if len(img_parts) >= 4:
+            img_path = UPLOADS_DIR / img_parts[2] / img_parts[3]
+            if img_path.exists():
+                img_b64 = base64.b64encode(img_path.read_bytes()).decode()
+                ext = img_path.suffix.lstrip(".")
+                mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
+                mime = mime_map.get(ext, "image/jpeg")
+                
+                user_content = []
+                if user_message:
+                    user_content.append({"type": "text", "text": user_message})
+                else:
+                    user_content.append({"type": "text", "text": "[User sent an image]"})
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{img_b64}", "detail": "auto"}
+                })
+                gpt_messages.append({"role": "user", "content": user_content})
+            else:
+                use_vision = False
+                gpt_messages.append({"role": "user", "content": user_message or "[Image not found]"})
+        else:
+            use_vision = False
+            gpt_messages.append({"role": "user", "content": user_message or "[Image]"})
+    else:
+        gpt_messages.append({"role": "user", "content": user_message})
+    
+    # Use GPT-4o for vision, GPT-4o-mini for text-only
+    model = "gpt-4o" if use_vision else "gpt-4o-mini"
     
     try:
         resp = openai.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=gpt_messages,
             temperature=0.75,
             max_tokens=max_tokens,
@@ -549,7 +921,11 @@ def chat():
         log.error(f"GPT error: {e}")
         reply = "Sorry, my brain just glitched for a second. What were you saying?"
     
-    store_message(conn, "user", user_message)
+    # Store message with optional image reference
+    store_content = user_message
+    if image_url:
+        store_content = f"[image:{image_url}]" + (f" {user_message}" if user_message else "")
+    store_message(conn, "user", store_content)
     store_message(conn, "assistant", reply)
     
     # --- Post-response extraction (async-style, non-blocking to user) ---
@@ -647,6 +1023,57 @@ def get_pending():
     conn.commit()
     
     return jsonify({"messages": [{"id": row["id"], "content": row["content"], "created_at": row["created_at"]}]})
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Image uploads
+# ---------------------------------------------------------------------------
+
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+@app.route("/api/upload", methods=["POST"])
+@require_auth
+def upload_image():
+    """Upload an image. Returns a URL that can be referenced in chat."""
+    if "image" not in request.files:
+        return jsonify({"error": "No image provided"}), 400
+    
+    f = request.files["image"]
+    if not f.filename:
+        return jsonify({"error": "No file selected"}), 400
+    
+    mime = f.content_type or ""
+    if mime not in ALLOWED_IMAGE_TYPES:
+        return jsonify({"error": f"Unsupported type: {mime}. Use JPEG, PNG, GIF, or WebP."}), 400
+    
+    data = f.read()
+    if len(data) > MAX_IMAGE_SIZE:
+        return jsonify({"error": "Image too large (max 10MB)"}), 400
+    
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}.get(mime, "jpg")
+    name = f"{secrets.token_hex(12)}.{ext}"
+    
+    # Save per-user
+    user_dir = UPLOADS_DIR / request.user_id
+    user_dir.mkdir(exist_ok=True)
+    path = user_dir / name
+    path.write_bytes(data)
+    
+    url = f"/api/uploads/{request.user_id}/{name}"
+    log.info(f"Upload: {request.user_id} -> {name} ({len(data)} bytes)")
+    return jsonify({"url": url, "filename": name})
+
+
+@app.route("/api/uploads/<user_id>/<filename>")
+def serve_upload(user_id, filename):
+    """Serve uploaded images."""
+    upload_path = UPLOADS_DIR / user_id
+    if not upload_path.exists():
+        return "", 404
+    return send_from_directory(str(upload_path), filename)
 
 
 # ---------------------------------------------------------------------------
