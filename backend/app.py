@@ -592,21 +592,61 @@ def get_questions():
 @app.route("/api/pending", methods=["GET"])
 @require_auth
 def get_pending():
-    """Fetch undelivered proactive messages (from nightly research, nudges, etc).
+    """Fetch ONE undelivered proactive message (from nightly research, nudges, etc).
     
-    The frontend should poll this on app open / periodically.
-    Returns pending messages and marks them as delivered.
+    Delivers at most one message per call, and only during reasonable hours
+    (8am-10pm user local time). The frontend should call this when the user
+    opens the app or sends a message — not on a rapid poll loop.
+    
+    This prevents Tangle from hammering the user with multiple follow-ups.
+    One topic at a time, wait for a response before the next.
     """
     conn = get_db(request.user_id)
-    rows = conn.execute(
-        "SELECT id, content, created_at FROM messages WHERE role='assistant' AND delivered=0 ORDER BY id"
+    
+    # Check if user has unresponded proactive messages already
+    # (don't stack up follow-ups without user responding)
+    last_msgs = conn.execute(
+        "SELECT role FROM messages WHERE delivered=1 ORDER BY id DESC LIMIT 3"
     ).fetchall()
-    messages = [{"id": r["id"], "content": r["content"], "created_at": r["created_at"]} for r in rows]
-    if messages:
-        ids = [m["id"] for m in messages]
-        conn.execute(f"UPDATE messages SET delivered=1 WHERE id IN ({','.join('?' * len(ids))})", ids)
-        conn.commit()
-    return jsonify({"messages": messages})
+    # If the last message was from assistant (proactive), don't send another
+    if last_msgs and last_msgs[0]["role"] == "assistant":
+        return jsonify({"messages": []})
+    
+    # Check reasonable hours (default Eastern timezone)
+    profile = conn.execute("SELECT timezone FROM user_profile WHERE id=1").fetchone()
+    tz_name = profile["timezone"] if profile else "America/New_York"
+    
+    # Simple hour check — we approximate timezone offset
+    # US Eastern = UTC-4 (EDT) or UTC-5 (EST)
+    utc_now = datetime.now(timezone.utc)
+    if "Eastern" in tz_name or "New_York" in tz_name:
+        local_hour = (utc_now.hour - 4) % 24
+    elif "Central" in tz_name or "Chicago" in tz_name:
+        local_hour = (utc_now.hour - 5) % 24
+    elif "Mountain" in tz_name or "Denver" in tz_name:
+        local_hour = (utc_now.hour - 6) % 24
+    elif "Pacific" in tz_name or "Los_Angeles" in tz_name:
+        local_hour = (utc_now.hour - 7) % 24
+    else:
+        local_hour = utc_now.hour  # fallback to UTC
+    
+    # Only deliver between 8am and 10pm local time
+    if local_hour < 8 or local_hour >= 22:
+        return jsonify({"messages": []})
+    
+    # Get ONE pending message (oldest first)
+    row = conn.execute(
+        "SELECT id, content, created_at FROM messages WHERE role='assistant' AND delivered=0 ORDER BY id LIMIT 1"
+    ).fetchone()
+    
+    if not row:
+        return jsonify({"messages": []})
+    
+    # Mark as delivered
+    conn.execute("UPDATE messages SET delivered=1 WHERE id=?", (row["id"],))
+    conn.commit()
+    
+    return jsonify({"messages": [{"id": row["id"], "content": row["content"], "created_at": row["created_at"]}]})
 
 
 # ---------------------------------------------------------------------------

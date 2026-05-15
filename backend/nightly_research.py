@@ -11,6 +11,7 @@ Runs via cron at ~2am. For each user:
 import os
 import json
 import random
+import re
 import sqlite3
 import logging
 import urllib.request
@@ -26,39 +27,44 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [tangle-nightly] %(m
 log = logging.getLogger("nightly")
 
 openai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
 
 # ---------------------------------------------------------------------------
-# Web search via Brave API
+# Web search via DuckDuckGo Lite (free, no API key)
 # ---------------------------------------------------------------------------
 
-def brave_search(query: str, count: int = 5) -> list[dict]:
-    """Search the web via Brave Search API. Returns list of {title, url, description}."""
-    if not BRAVE_API_KEY:
-        log.warning("No BRAVE_API_KEY set — skipping web search")
-        return []
-
+def web_search(query: str, max_results: int = 5) -> list[dict]:
+    """Search the web via DuckDuckGo Lite — free, no API key required."""
     try:
-        params = urllib.parse.urlencode({"q": query, "count": count})
-        url = f"https://api.search.brave.com/res/v1/web/search?{params}"
-        req = urllib.request.Request(url, headers={
-            "Accept": "application/json",
-            "Accept-Encoding": "identity",
-            "X-Subscription-Token": BRAVE_API_KEY,
-        })
+        url = f"https://lite.duckduckgo.com/lite/?q={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        # Extract result links from DDG Lite redirect format
+        raw_links = re.findall(
+            r'<a[^>]+rel="nofollow"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            html, re.DOTALL
+        )
+        # Extract snippet text from result body cells
+        raw_snippets = re.findall(
+            r'<td[^>]*class="result-snippet[^"]*"[^>]*>(.*?)</td>',
+            html, re.DOTALL
+        )
+
         results = []
-        for item in data.get("web", {}).get("results", [])[:count]:
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "description": item.get("description", ""),
-            })
+        for i, (href, title_html) in enumerate(raw_links[:max_results]):
+            title = re.sub(r'<[^>]+>', '', title_html).strip()
+            # Decode DDG redirect URL
+            m = re.search(r'uddg=([^&]+)', href)
+            real_url = urllib.parse.unquote(m.group(1)) if m else href
+            snippet = re.sub(r'<[^>]+>', '', raw_snippets[i]).strip() if i < len(raw_snippets) else ""
+            if title:
+                results.append({"title": title, "url": real_url, "description": snippet})
+
         return results
     except Exception as e:
-        log.error(f"Brave search failed for '{query[:50]}': {e}")
+        log.error(f"Web search failed for '{query[:50]}': {e}")
         return []
 
 
@@ -70,7 +76,7 @@ def research_question(question: str) -> str | None:
     """Research a question using Brave web search + GPT-4o synthesis."""
 
     # Step 1: Search the web
-    search_results = brave_search(question, count=5)
+    search_results = web_search(question, max_results=5)
     search_context = ""
     if search_results:
         search_context = "\n\n".join(
