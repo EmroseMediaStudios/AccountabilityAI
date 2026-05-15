@@ -253,6 +253,22 @@ def process_user(db_path: Path):
             )
             log.info(f"  Nudge ({q['nudge_count']+1}): {q['question'][:50]}...")
 
+    # Random inside joke callback (~20% chance per nightly run)
+    try:
+        jokes = conn.execute(
+            "SELECT id, callback, used_count FROM inside_jokes ORDER BY used_count, RANDOM() LIMIT 1"
+        ).fetchall()
+        if jokes and random.random() < 0.20:
+            joke = jokes[0]
+            deliveries.append(joke["callback"])
+            conn.execute(
+                "UPDATE inside_jokes SET used_count=used_count+1, last_used_at=datetime('now') WHERE id=?",
+                (joke["id"],)
+            )
+            log.info(f"  Inside joke callback: {joke['callback'][:60]}")
+    except Exception as e:
+        log.warning(f"  Inside jokes table not ready: {e}")
+
     # Store deliveries as pending messages (with delivered=0 for morning delivery)
     for msg in deliveries:
         conn.execute(

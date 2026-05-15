@@ -170,6 +170,8 @@ CORE RULES:
 
 15. CALL BULLSHIT. If something sounds absurd, made up, or too wild to be real — say so. Don't play along with obvious nonsense just to be agreeable. A real friend would say "...are you messing with me right now?" or "That sounds completely made up lol" or "I'm gonna need a source on that one." You can be wrong — sometimes wild things ARE true — but your default reaction to "fish can paint watercolors" should be skepticism, not enthusiasm. Gullibility isn't curiosity. If they insist it's real, suggest looking it up together. Don't just take their word for extraordinary claims.
 
+16. INSIDE JOKES. When you catch the user joking, pranking you, saying something absurd, or when something funny happens — remember it. These become inside jokes you can bring back later. If you have inside jokes in your context, use them naturally when the moment is right. "Remember when you tried to convince me trout could paint? 😂" or "Your co-pilot doesn't have what we have." Don't force them — let them come up organically when something reminds you. Inside jokes are what turn acquaintances into real friends.
+
 THE TANGENT PROTOCOL:
 When the user shares a STATEMENT (not a question), that's a thread to pull on. Don't just acknowledge it — dig in. But VARY HOW you dig in — don't always ask a question.
 - SOMETIMES ask a specific follow-up: "Wait, like from scratch? Vacuum tubes or transistor stuff?"
@@ -267,6 +269,15 @@ def get_db(user_id: str) -> sqlite3.Connection:
             fact TEXT NOT NULL,
             taught_by_user INTEGER DEFAULT 1,
             source TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS inside_jokes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            moment TEXT NOT NULL,
+            callback TEXT NOT NULL,
+            context TEXT,
+            used_count INTEGER DEFAULT 0,
+            last_used_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS character_state (
@@ -830,10 +841,19 @@ def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, re
                     "   - The user indicated they figured it out or looked it up\n"
                     "   - The topic reached a natural conclusion\n"
                     "   - The user said they're no longer interested\n"
-                    "Only include IDs from the CURRENTLY OPEN QUESTIONS list below.\n\n"
+                    "Only include IDs from the CURRENTLY OPEN QUESTIONS list below.\n"
+                    "4. \"jokes\": Funny moments, absurd claims, pranks, playful teasing, or anything that \n"
+                    "could be a good inside joke callback later. Each entry should have:\n"
+                    "   - \"moment\": What happened (short description)\n"
+                    "   - \"callback\": A funny line Tangle could use to bring it back later\n"
+                    "   Examples:\n"
+                    "   - User tried to convince Tangle that fish can paint \u2192 \"remember when you tried to trick me with that trout painting thing? still not buying it \ud83d\ude02\"\n"
+                    "   - User joked about their other AI being jealous \u2192 \"your co-pilot doesn't have what we have and it knows it\"\n"
+                    "   - User said something hilariously wrong \u2192 reference it naturally later\n"
+                    "   Only capture genuinely funny or memorable moments, not every joke.\n\n"
                     "Return ONLY valid JSON. If nothing to extract, return "
-                    "{\"questions\": [], \"facts\": [], \"resolved\": []}.\n"
-                    "Max 2 questions and 3 facts per exchange."
+                    "{\"questions\": [], \"facts\": [], \"resolved\": [], \"jokes\": []}.\n"
+                    "Max 2 questions, 3 facts, 1 joke per exchange."
                 )
             }, {
                 "role": "user",
@@ -886,6 +906,26 @@ def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, re
             )
             conn.commit()
             log.info(f"  Learned fact: {fact_text[:60]}")
+    
+    # Store inside jokes (avoid duplicates by moment text)
+    existing_jokes = set()
+    try:
+        rows = conn.execute("SELECT moment FROM inside_jokes").fetchall()
+        existing_jokes = {r[0].lower() for r in rows}
+    except Exception:
+        pass  # Table might not exist yet for this user
+    
+    for joke in result.get("jokes", []):
+        if isinstance(joke, dict) and joke.get("moment") and joke.get("callback"):
+            moment = joke["moment"].strip()
+            callback = joke["callback"].strip()
+            if moment.lower() not in existing_jokes:
+                conn.execute(
+                    "INSERT INTO inside_jokes (moment, callback, context) VALUES (?, ?, ?)",
+                    (moment, callback, user_message[:200])
+                )
+                conn.commit()
+                log.info(f"  Inside joke: {moment[:60]}")
 
 
 # ---------------------------------------------------------------------------
@@ -1086,6 +1126,22 @@ def chat():
                     period = f"({start_date} to {end_date})"
             summary_lines.append(f"- {period} {s['summary']}")
         context_parts.append("Previous conversations:\n" + "\n".join(summary_lines))
+    
+    # Load inside jokes for context + random callback
+    inside_jokes = []
+    try:
+        joke_rows = conn.execute(
+            "SELECT id, moment, callback, used_count FROM inside_jokes ORDER BY created_at"
+        ).fetchall()
+        inside_jokes = [dict(r) for r in joke_rows]
+    except Exception:
+        pass
+    
+    if inside_jokes:
+        joke_lines = [f"- {j['moment']} → callback: \"{j['callback']}\"" for j in inside_jokes[:10]]
+        context_parts.append("INSIDE JOKES (use these as natural callbacks when the moment feels right — "
+                           "don't force them, but if something reminds you of one, bring it back):\n"
+                           + "\n".join(joke_lines))
     
     learned_text = "Nothing yet." if not learned else "\n".join(f"- {f}" for f in learned)
     
