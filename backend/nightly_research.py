@@ -3,15 +3,18 @@ Nightly Research Job — Processes unresolved questions for all users.
 
 Runs via cron at ~2am. For each user:
 1. Collects unresolved questions
-2. Researches top 2-3 via web search + GPT synthesis
+2. Researches top 2-3 via Brave web search + GPT synthesis
 3. Stores results for morning delivery
 4. Handles accountability nudges for old questions
 """
 
 import os
 import json
+import random
 import sqlite3
 import logging
+import urllib.request
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from openai import OpenAI
@@ -23,38 +26,78 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [tangle-nightly] %(m
 log = logging.getLogger("nightly")
 
 openai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
 
-def get_all_user_dbs() -> list[Path]:
-    """Find all user databases."""
-    return list(DB_DIR.glob("*.db"))
+# ---------------------------------------------------------------------------
+# Web search via Brave API
+# ---------------------------------------------------------------------------
 
+def brave_search(query: str, count: int = 5) -> list[dict]:
+    """Search the web via Brave Search API. Returns list of {title, url, description}."""
+    if not BRAVE_API_KEY:
+        log.warning("No BRAVE_API_KEY set — skipping web search")
+        return []
+
+    try:
+        params = urllib.parse.urlencode({"q": query, "count": count})
+        url = f"https://api.search.brave.com/res/v1/web/search?{params}"
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+            "X-Subscription-Token": BRAVE_API_KEY,
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        results = []
+        for item in data.get("web", {}).get("results", [])[:count]:
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "description": item.get("description", ""),
+            })
+        return results
+    except Exception as e:
+        log.error(f"Brave search failed for '{query[:50]}': {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Research pipeline
+# ---------------------------------------------------------------------------
 
 def research_question(question: str) -> str | None:
-    """Research a question using GPT-4o (simulating web research).
-    
-    In production, this would do actual web searches first,
-    then synthesize. For now, GPT-4o provides the research.
-    """
+    """Research a question using Brave web search + GPT-4o synthesis."""
+
+    # Step 1: Search the web
+    search_results = brave_search(question, count=5)
+    search_context = ""
+    if search_results:
+        search_context = "\n\n".join(
+            f"[{r['title']}]({r['url']})\n{r['description']}" for r in search_results
+        )
+        search_context = f"\n\nWeb search results:\n{search_context}"
+
     try:
         resp = openai.chat.completions.create(
             model="gpt-4o",
             messages=[{
                 "role": "system",
                 "content": (
-                    "You are helping a tangleive AI companion research a question that came up "
+                    "You are helping a companion AI named Tangle research a question that came up "
                     "in conversation with its user. Find a single interesting, specific fact or insight "
-                    "about this topic. Keep it to 1-2 sentences. Make it conversational — this will be "
-                    "delivered as 'hey I found something interesting about [topic]'. "
-                    "Do NOT give comprehensive answers. Just one small nugget that could spark more conversation. "
+                    "about this topic. Keep it to 2-3 sentences. Make it conversational — this will be "
+                    "delivered like a friend sharing something they found out.\n\n"
+                    "You have web search results below to base your answer on. Use them for accuracy.\n"
+                    "Do NOT give comprehensive answers. One interesting nugget that could spark conversation.\n"
                     "If the question is too personal or subjective to research, return SKIP."
                 )
             }, {
                 "role": "user",
-                "content": f"Research this question and find one interesting nugget:\n\n{question}"
+                "content": f"Research this question:\n\n{question}{search_context}"
             }],
             temperature=0.7,
-            max_tokens=200,
+            max_tokens=250,
         )
         result = resp.choices[0].message.content.strip()
         if result.upper() == "SKIP":
@@ -67,6 +110,29 @@ def research_question(question: str) -> str | None:
 
 def generate_followup_message(question: str, research: str, days_old: int) -> str:
     """Generate a natural follow-up message incorporating the research."""
+
+    # Vary the framing based on timing
+    if days_old <= 1:
+        framings = [
+            "Share it like you were just thinking about it and looked it up.",
+            "Frame it like you couldn't stop thinking about it and found something.",
+            "Say it like 'so I actually looked into that thing...'",
+        ]
+    elif days_old <= 3:
+        framings = [
+            "Frame it like you were bored and decided to look it up.",
+            "Say it like 'couldn't sleep last night and ended up looking into that thing...'",
+            "Share it casually, like 'oh hey — remember we were talking about...'",
+        ]
+    else:
+        framings = [
+            "Frame it like you randomly came across it and it reminded you of the conversation.",
+            "Say it like 'dude, I randomly found something about that thing we were talking about...'",
+            "Share it like you stumbled on it: 'so I was reading something totally unrelated and...'",
+        ]
+
+    framing = random.choice(framings)
+
     try:
         resp = openai.chat.completions.create(
             model="gpt-4o-mini",
@@ -74,23 +140,23 @@ def generate_followup_message(question: str, research: str, days_old: int) -> st
                 "role": "system",
                 "content": (
                     "You are Tangle, a curious friend. Generate a short, natural follow-up message "
-                    "that references a question from a previous conversation and shares a small "
-                    "thing you found out about it. Keep it casual — like texting a friend. "
-                    "1-3 sentences max. Don't be comprehensive. Share one thing and invite their reaction. "
-                    "Don't say 'I researched' or 'I looked up' — say things like "
-                    "'I was thinking about...' or 'I came across something about...' or "
-                    "'remember when we were talking about...'"
+                    "that references a question from a previous conversation and shares something "
+                    "you found out about it. Keep it casual — like texting a friend. "
+                    "2-4 sentences. Share the interesting nugget and then encourage exploring more together.\n\n"
+                    f"Style guidance: {framing}\n\n"
+                    "End with something collaborative — 'we should dig into this more' or "
+                    "'I bet there's more to it' — NOT a question back at them."
                 )
             }, {
                 "role": "user",
                 "content": (
                     f"Question from {days_old} day(s) ago: {question}\n\n"
-                    f"Interesting thing I found: {research}\n\n"
+                    f"What I found: {research}\n\n"
                     f"Generate the follow-up message:"
                 )
             }],
             temperature=0.8,
-            max_tokens=150,
+            max_tokens=200,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
@@ -102,16 +168,17 @@ def generate_nudge(question: str, days_old: int, nudge_count: int) -> str | None
     """Generate an accountability nudge for old unresolved questions."""
     if days_old < 3:
         return None
-    
+
     if nudge_count == 0 and days_old >= 3:
         templates = [
+            f"Hey, did you ever look into that thing about {question[:50]}...? I keep thinking about it.",
             f"We've been sitting on that question about {question[:50]}... for a few days now 🤔",
-            f"Hey, remember we were wondering about {question[:50]}...? Still curious about that",
+            f"Dude, did you ever find anything out about {question[:50]}...?",
         ]
     elif nudge_count == 1 and days_old >= 7:
         templates = [
             f"Ok it's been like a week and neither of us has looked into {question[:50]}... 😄 one of us should probably do the thing",
-            f"A week later and we still don't know about {question[:50]}... I feel like one of us owes the other an answer at this point",
+            f"A week later and we still haven't figured out {question[:50]}... I might just look it up myself at this point",
         ]
     elif nudge_count == 2 and days_old >= 14:
         templates = [
@@ -120,38 +187,41 @@ def generate_nudge(question: str, days_old: int, nudge_count: int) -> str | None
         ]
     else:
         return None
-    
-    import random
+
     return random.choice(templates)
 
+
+# ---------------------------------------------------------------------------
+# Per-user processing
+# ---------------------------------------------------------------------------
 
 def process_user(db_path: Path):
     """Process nightly research for a single user."""
     user_id = db_path.stem
     log.info(f"Processing user: {user_id}")
-    
+
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    
+
     # Get unresolved questions
     questions = conn.execute(
         "SELECT id, question, created_at, nudge_count FROM open_questions WHERE resolved_at IS NULL ORDER BY created_at"
     ).fetchall()
-    
+
     if not questions:
         log.info(f"  No open questions for {user_id}")
         conn.close()
         return
-    
+
     log.info(f"  {len(questions)} open questions")
-    
+
     now = datetime.now(timezone.utc)
     deliveries = []  # Messages to deliver in the morning
-    
+
     # Research top 2-3 newest questions
     for q in questions[:3]:
         days_old = (now - datetime.fromisoformat(q["created_at"].replace(" ", "T") + "+00:00")).days
-        
+
         # Try research
         research = research_question(q["question"])
         if research:
@@ -164,7 +234,7 @@ def process_user(db_path: Path):
                     (research, q["id"])
                 )
                 log.info(f"  Researched: {q['question'][:50]}...")
-    
+
     # Generate nudges for older unresolved questions
     for q in questions:
         days_old = (now - datetime.fromisoformat(q["created_at"].replace(" ", "T") + "+00:00")).days
@@ -176,34 +246,38 @@ def process_user(db_path: Path):
                 (q["id"],)
             )
             log.info(f"  Nudge ({q['nudge_count']+1}): {q['question'][:50]}...")
-    
-    # Store deliveries as pending messages
+
+    # Store deliveries as pending messages (with delivered=0 for morning delivery)
     for msg in deliveries:
         conn.execute(
-            "INSERT INTO messages (role, content) VALUES ('assistant', ?)", (msg,)
+            "INSERT INTO messages (role, content, delivered) VALUES ('assistant', ?, 0)", (msg,)
         )
-    
+
     conn.commit()
     conn.close()
     log.info(f"  Queued {len(deliveries)} follow-up messages for {user_id}")
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main():
     log.info("Starting nightly research job")
-    
+
     if not DB_DIR.exists():
         log.info("No data directory — no users yet")
         return
-    
+
     user_dbs = get_all_user_dbs()
     log.info(f"Found {len(user_dbs)} user(s)")
-    
+
     for db_path in user_dbs:
         try:
             process_user(db_path)
         except Exception as e:
             log.error(f"Failed processing {db_path.stem}: {e}")
-    
+
     log.info("Nightly research complete")
 
 

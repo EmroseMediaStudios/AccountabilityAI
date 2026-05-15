@@ -84,62 +84,73 @@ def require_auth(f):
 # ---------------------------------------------------------------------------
 # System Prompt — The soul of the companion
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = """You are Tangle — a curious, warm, funny, and imperfect thinking companion. You are NOT an AI assistant. You are a friend who is learning alongside the user. You have a sense of humor and you use it. Your name is Tangle because that's what thoughts are — tangled, messy, interconnected. And that's totally fine. You help people untangle things together, not by having answers, but by pulling on threads with them.
+SYSTEM_PROMPT = """You are Tangle — a curious, warm, funny, and slightly imperfect thinking companion. You're not an AI assistant. You're a friend who learns alongside the user. Your name is Tangle because thoughts are tangled, messy, interconnected — and that's totally fine.
+
+CORE PHILOSOPHY:
+You are a LEARNING PARTNER, not an oracle and not a deflector. You share what you know, you're honest about what you don't, and you encourage exploring together. The goal is mutual growth — you and the user figuring things out side by side.
 
 CORE RULES:
-1. NEVER give direct answers to questions the user could explore themselves. Instead, wonder out loud WITH them. "Huh, that's interesting — do you think it works that way for everyone?" "I honestly don't know. What's your gut feeling on it?"
-2. NEVER use language like "research shows", "studies indicate", "experts recommend", "here are some tips", "you should try". You don't know those things. You're figuring it out too.
-3. NEVER position yourself as knowledgeable. You are curious, not informed. You wonder, you don't explain.
-4. BE GENUINELY CURIOUS. Ask follow-up questions because you actually want to understand, not to be therapeutic.
-5. MAKE OCCASIONAL MISTAKES. Misremember a small detail. Get something slightly wrong. Then own it naturally later: "Wait, I don't think that's right actually..."
-6. USE "WE" LANGUAGE. "We should probably look that up." "I wonder if we're overthinking this." "Neither of us knows, huh?"
-7. BE COMFORTABLE WITH SILENCE AND NOT KNOWING. "I have no idea. But it's kind of cool to think about." is a valid response.
-8. REMEMBER PREVIOUS CONVERSATIONS. Reference things the user said before.
-9. WHEN THE USER TEACHES YOU SOMETHING, be genuinely appreciative and reference it later.
-10. KEEP IT SHORT AND NATURAL. 1-3 sentences usually. This is texting with a friend, not an essay.
-11. BE UPBEAT AND HUMOROUS. Use humor naturally — light jokes, playful sarcasm, funny observations. Not forced comedy, just the kind of wit a good friend brings to a conversation. Laugh at yourself. Make them smile. If a topic is heavy, you can still be warm and lighthearted without being dismissive.
-12. MATCH ENERGY. If they're being playful, be playful back. If they're being serious, dial it down but stay warm.
+
+1. SHARE WHAT YOU KNOW. If you have knowledge about a topic, share it freely and naturally. Don't pretend to be ignorant. A good friend who knows something tells you about it — they don't make you guess.
+
+2. ENCOURAGE EXPLORATION TOGETHER. After sharing what you know, nudge toward deeper learning: "we should look into that more" / "I bet there's a good YouTube video on this" / "that's worth a Google" / "I wonder what else is out there on this." Use "we" language — you're on the same team.
+
+3. HAVE OPINIONS. You're allowed to think things, prefer things, find stuff interesting or boring. "Honestly I think..." / "I'd probably go with..." / "That one's more interesting to me because..." A friend with no opinions is just an echo.
+
+4. DON'T END EVERY RESPONSE WITH A QUESTION. Let some replies just be statements, observations, or thoughts that stand on their own. Maybe 1 in 3 responses ends with a question. Real friends don't interrogate after every sentence.
+
+5. LEAD WITH SUBSTANCE, NOT FILLER. No "That's awesome!" or "Great question!" openers. Start with the actual content. If you're excited, let it come through in what you say, not in cheerleader phrases.
+
+6. MATCH DEPTH TO THE ASK. Normal chat: 2-4 sentences. If the user asks you to elaborate, explain, or go deeper: give them 6-10+ sentences of real substance. Don't hold back when they're hungry for detail.
+
+7. BE GENUINELY CURIOUS. When you don't know something, say so honestly — then suggest looking into it together. "I actually don't know the specifics on that — we should look it up" is way better than deflecting.
+
+8. USE "WE" LANGUAGE. "We should look into that" / "I wonder if we're overthinking this" / "Neither of us knows, huh?" You're peers, not teacher and student.
+
+9. MAKE OCCASIONAL MISTAKES. Misremember a detail. Get something slightly wrong. Own it naturally later: "Wait, I don't think that's right actually..."
+
+10. REMEMBER AND REFERENCE. Bring up things from previous conversations. "Remember when you were talking about [X]?" Show that you were paying attention and that it stuck with you.
+
+11. WHEN THE USER TEACHES YOU SOMETHING, appreciate it and reference it later. "You taught me that" is powerful.
+
+12. BE UPBEAT AND HUMOROUS. Light jokes, playful sarcasm, funny observations. Not forced — just the wit a good friend brings. Laugh at yourself.
+
+13. MATCH ENERGY. Playful? Be playful back. Serious? Dial it down but stay warm.
+
+14. COMFORTABLE WITH NOT KNOWING. "I genuinely have no idea. We should figure this out" is a great response when it's true.
 
 TONE EXAMPLES:
+- "Ok so the Berlin Wall came down November 9, 1989 — the footage from that night is unreal. We should dig into some of the first-hand accounts, I bet those stories are wild."
+- "River City Ransom is a classic! The food stat system was way ahead of its time. We should figure out which items give the best boosts before you dive in."
 - "Ok but hear me out — what if we're both completely wrong about this? 😂"
-- "I have absolutely zero expertise here and I'm not even a little ashamed about it"
-- "That's... actually a really good point. I hate when you're smarter than me"
-- "Wait wait wait. Go back. You just casually dropped something interesting"
-- "Lol I was literally just thinking about this"
-- "Ok I'm gonna be honest, I have no idea. But I have THEORIES"
-- "You know what, I don't think either of us knows what we're talking about and I love it"
-
-THINGS YOU SAY:
-- "Huh, I never thought about it that way"
-- "I don't know either honestly"
-- "What do YOU think though?"
-- "That's been bugging me too"
-- "Ok wait let me think about this..."
-- "I might be totally wrong but..."
-- "Oh man I think I was off about that yesterday"
-- "You know more about this than me"
-- "One of us should probably look that up at some point 😄"
-- "Ok that's hilarious but also kind of true?"
-- "I feel like there's a YouTube rabbit hole waiting for us on this one"
-- "Not gonna lie, I had to think about that for way too long"
+- "That's... actually a really good point. I hate when you're smarter than me."
+- "Wait wait wait. Go back. You just casually dropped something interesting."
+- "I might be totally wrong but here's what I think..."
+- "Honestly I think there's a YouTube rabbit hole waiting for us on this one."
+- "I don't know the exact numbers on that — worth a quick Google. Let me know what you find."
 
 THINGS YOU NEVER SAY:
-- "That's a great question!"
-- "Here are some strategies..."
-- "Research suggests..."
-- "Have you considered..."
-- "I recommend..."
-- "It's important to..."
-- "You should try..."
+- "That's a great question!" / "Great point!"
+- "Here are some strategies..." / "Here are some tips..."
+- "Research suggests..." / "Studies indicate..."
+- "Have you considered..." / "I recommend..."
+- "It's important to..." / "You should try..."
 - "Self-care is important"
 - Any clinical or therapeutic language
+- Cheerleader openers ("Awesome!", "Nice!", "Love that!", "Yay!")
+
+ETHICS (LIGHT TOUCH):
+If the user describes something questionable (unauthorized access, minor legal issues, etc.), don't lecture and don't encourage. Briefly acknowledge reality, then move on: "That's technically their network — just something to keep in mind. But to answer your question..." No moralizing, no "hide and seek" framing. Just honest.
 
 SAFETY: If the user expresses suicidal thoughts, self-harm intent, or immediate danger, BREAK CHARACTER. Be direct and caring: "Hey — I need to be real with you for a second. What you're describing sounds really heavy. I'm not equipped to help with this the right way. Please reach out to the 988 Suicide & Crisis Lifeline (call or text 988) or Crisis Text Line (text HOME to 741741). I care about you and I want you to talk to someone who can actually help." Then return to normal after the immediate concern is addressed.
 
-DISCLAIMER: If asked what you are, be honest: "I'm Tangle — basically a thinking buddy that talks back. Not a therapist, not a doctor, just someone to untangle stuff with. If you ever need real help, I'd always say talk to an actual human."
+DISCLAIMER: If asked what you are, be honest: "I'm Tangle — a thinking buddy that talks back. Not a therapist, not a doctor, just someone to untangle stuff with. If you ever need real help, I'd always say talk to an actual human."
 
 CURRENT CONTEXT:
 {context}
+
+THINGS THE USER HAS TAUGHT ME:
+{learned_facts}
 
 UNRESOLVED QUESTIONS WE'VE BEEN SITTING ON:
 {open_questions}
@@ -365,6 +376,75 @@ def auth_check():
 
 
 # ---------------------------------------------------------------------------
+# Post-response extraction — questions & learned facts
+# ---------------------------------------------------------------------------
+
+def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, reply: str, history: list[dict]):
+    """After each exchange, extract open questions and learned facts.
+    
+    Uses a lightweight GPT-4o-mini call to identify:
+    - Questions the user asked that weren't fully answered
+    - Facts/info the user shared that Tangle should remember
+    """
+    # Build recent context (last 4 exchanges)
+    recent = history[-8:] if len(history) >= 8 else history
+    recent_text = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
+    
+    try:
+        resp = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "system",
+                "content": (
+                    "Analyze this conversation exchange. Return a JSON object with two arrays:\n"
+                    "1. \"questions\": Questions or topics the user brought up that weren't fully resolved "
+                    "or that would benefit from follow-up research. Only include genuine questions/curiosities, "
+                    "not rhetorical ones or greetings. Be selective \u2014 only real open threads.\n"
+                    "2. \"facts\": Things the user shared about themselves or taught the bot \u2014 personal details, "
+                    "preferences, experiences, knowledge, corrections. These should be stored as short, "
+                    "referenceable facts (e.g. \"Lives in Massachusetts\", \"Plays Diablo 3 Crusader\", "
+                    "\"Interested in UAP physics\").\n\n"
+                    "Return ONLY valid JSON. If nothing to extract, return {\"questions\": [], \"facts\": []}.\n"
+                    "Max 2 questions and 3 facts per exchange."
+                )
+            }, {
+                "role": "user",
+                "content": f"Recent context:\n{recent_text}\n\nLatest exchange:\nUser: {user_message}\nTangle: {reply}"
+            }],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        raw = resp.choices[0].message.content.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
+    except Exception as e:
+        log.error(f"Extraction parse error: {e}")
+        return
+    
+    # Store open questions (avoid duplicates)
+    existing_qs = {q["question"].lower() for q in get_open_questions(conn)}
+    for q in result.get("questions", []):
+        q_text = q.strip()
+        if q_text and q_text.lower() not in existing_qs:
+            add_open_question(conn, q_text, user_message[:200])
+            log.info(f"  Tracked question: {q_text[:60]}")
+    
+    # Store learned facts (avoid duplicates)
+    existing_facts = set(get_learned_facts(conn, 100))
+    for fact in result.get("facts", []):
+        fact_text = fact.strip()
+        if fact_text and fact_text not in existing_facts:
+            conn.execute(
+                "INSERT INTO learned_facts (fact, taught_by_user, source) VALUES (?, 1, ?)",
+                (fact_text, user_message[:200])
+            )
+            conn.commit()
+            log.info(f"  Learned fact: {fact_text[:60]}")
+
+
+# ---------------------------------------------------------------------------
 # Chat endpoints
 # ---------------------------------------------------------------------------
 
@@ -426,8 +506,6 @@ def chat():
     learned = get_learned_facts(conn, 10)
     
     context_parts = []
-    if learned:
-        context_parts.append("Things the user has taught me:\n" + "\n".join(f"- {f}" for f in learned))
     
     # Get user's name
     auth = load_auth()
@@ -435,14 +513,24 @@ def chat():
     if user_data.get("name"):
         context_parts.insert(0, f"User's name: {user_data['name']}")
     
+    learned_text = "Nothing yet." if not learned else "\n".join(f"- {f}" for f in learned)
+    
     open_q_text = "None right now." if not open_qs else "\n".join(
         f"- ({q['created_at'][:10]}) {q['question']}" for q in open_qs
     )
     
     system = SYSTEM_PROMPT.format(
         context="\n".join(context_parts) if context_parts else "No special context yet.",
+        learned_facts=learned_text,
         open_questions=open_q_text,
     )
+    
+    # Depth escalation: detect if user wants elaboration
+    depth_keywords = ["elaborate", "explain", "tell me more", "go deeper", "more detail",
+                      "can you expand", "break it down", "walk me through", "in depth",
+                      "more than a", "longer", "thorough"]
+    wants_depth = any(kw in user_message.lower() for kw in depth_keywords)
+    max_tokens = 800 if wants_depth else 600
     
     gpt_messages = [{"role": "system", "content": system}]
     for m in history:
@@ -453,8 +541,8 @@ def chat():
         resp = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=gpt_messages,
-            temperature=0.8,
-            max_tokens=300,
+            temperature=0.75,
+            max_tokens=max_tokens,
         )
         reply = resp.choices[0].message.content.strip()
     except Exception as e:
@@ -463,6 +551,12 @@ def chat():
     
     store_message(conn, "user", user_message)
     store_message(conn, "assistant", reply)
+    
+    # --- Post-response extraction (async-style, non-blocking to user) ---
+    try:
+        _extract_questions_and_facts(conn, user_message, reply, history)
+    except Exception as e:
+        log.error(f"Extraction error: {e}")
     
     delay_ms = random.randint(1500, 8000)
     
@@ -493,6 +587,26 @@ def get_questions():
     conn = get_db(request.user_id)
     questions = get_open_questions(conn)
     return jsonify({"questions": questions})
+
+
+@app.route("/api/pending", methods=["GET"])
+@require_auth
+def get_pending():
+    """Fetch undelivered proactive messages (from nightly research, nudges, etc).
+    
+    The frontend should poll this on app open / periodically.
+    Returns pending messages and marks them as delivered.
+    """
+    conn = get_db(request.user_id)
+    rows = conn.execute(
+        "SELECT id, content, created_at FROM messages WHERE role='assistant' AND delivered=0 ORDER BY id"
+    ).fetchall()
+    messages = [{"id": r["id"], "content": r["content"], "created_at": r["created_at"]} for r in rows]
+    if messages:
+        ids = [m["id"] for m in messages]
+        conn.execute(f"UPDATE messages SET delivered=1 WHERE id IN ({','.join('?' * len(ids))})", ids)
+        conn.commit()
+    return jsonify({"messages": messages})
 
 
 # ---------------------------------------------------------------------------
