@@ -1220,6 +1220,26 @@ def chat():
     else:
         gpt_messages.append({"role": "user", "content": user_message})
     
+    # Inside joke callback detector: if user revisits a known joke topic, nudge Tangle to call it out
+    if inside_jokes and msg_len > 15:
+        for joke in inside_jokes:
+            # Check if keywords from the joke moment appear in the message
+            moment_words = set(joke["moment"].lower().split())
+            msg_words = set(msg_lower.split())
+            overlap = moment_words & msg_words - {"the", "a", "an", "is", "was", "to", "and", "or", "in", "of", "that", "about"}
+            if len(overlap) >= 3:
+                gpt_messages.append({
+                    "role": "system",
+                    "content": (
+                        f"[INSIDE JOKE DETECTED] The user is referencing a known joke/prank: "
+                        f"\"{joke['moment']}\". Do NOT play along as if it's real. Instead, call it out "
+                        f"playfully as a callback: \"{joke['callback']}\" (or your own variation). "
+                        f"This is a joke between you two — own it, roast them for it, have fun with it. "
+                        f"Do NOT treat the topic as factual."
+                    )
+                })
+                break
+    
     # Tangent protocol: detect statements worth pulling on
     if not is_short and not wants_depth and not use_vision and msg_len > 20:
         has_question = '?' in user_message
