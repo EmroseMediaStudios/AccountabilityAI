@@ -355,6 +355,44 @@ def set_character_state(conn: sqlite3.Connection, state: str, reason: str = None
     conn.commit()
 
 
+def _queue_return_message(conn: sqlite3.Connection):
+    """Queue an 'I'm back' message when Tangle returns from away.
+    
+    Picks up the last user message before Tangle went away and references it
+    naturally, or just comes back with a casual re-entry.
+    """
+    # Get the last user message to reference
+    last_user_msg = conn.execute(
+        "SELECT content FROM messages WHERE role='user' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    
+    if last_user_msg and len(last_user_msg["content"]) > 10:
+        # Reference what they were talking about
+        return_msgs = [
+            f"Ok I'm back \u2014 so you were saying about {last_user_msg['content'][:50]}...?",
+            f"Alright I'm here. Sorry about that. Now where were we \u2014 you mentioned something about {last_user_msg['content'][:40]}...",
+            f"Back! Ok so I was thinking about what you said \u2014 {last_user_msg['content'][:50]}... tell me more about that",
+            f"Hey I'm back \ud83d\udc4b did you think of anything else about {last_user_msg['content'][:40]}... while I was gone?",
+            f"Ok I'm back. Still thinking about what you said earlier honestly",
+        ]
+    else:
+        return_msgs = [
+            "Ok I'm back \u2014 what'd I miss?",
+            "Alright I'm here \ud83d\udc4b sorry about that",
+            "Back! What were we talking about?",
+            "Hey \u2014 I'm back. So what's going on?",
+            "Ok I'm done, I'm here. What's up?",
+        ]
+    
+    msg = random.choice(return_msgs)
+    conn.execute(
+        "INSERT INTO messages (role, content, delivered) VALUES ('assistant', ?, 0)",
+        (msg,)
+    )
+    conn.commit()
+    log.info(f"  Queued return message: {msg[:60]}")
+
+
 def maybe_transition_state(conn: sqlite3.Connection) -> str | None:
     state = get_character_state(conn)
     
@@ -366,6 +404,8 @@ def maybe_transition_state(conn: sqlite3.Connection) -> str | None:
             if datetime.now(timezone.utc) >= next_time:
                 if state["state"] in ("busy", "away"):
                     set_character_state(conn, "available")
+                    # Queue a "I'm back" message for automatic delivery
+                    _queue_return_message(conn)
                     return "available"
         except (ValueError, TypeError):
             pass
