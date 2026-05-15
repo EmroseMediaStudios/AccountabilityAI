@@ -709,15 +709,26 @@ def admin_set_admin():
 # ---------------------------------------------------------------------------
 
 def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, reply: str, history: list[dict]):
-    """After each exchange, extract open questions and learned facts.
+    """After each exchange, extract open questions, learned facts, and resolve answered questions.
     
     Uses a lightweight GPT-4o-mini call to identify:
     - Questions the user asked that weren't fully answered
     - Facts/info the user shared that Tangle should remember
+    - Previously open questions that were just answered/resolved in this exchange
     """
     # Build recent context (last 4 exchanges)
     recent = history[-8:] if len(history) >= 8 else history
     recent_text = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
+    
+    # Build list of currently open questions for resolution check
+    open_qs = get_open_questions(conn)
+    open_qs_text = ""
+    if open_qs:
+        open_qs_lines = [f"  [{q['id']}] {q['question']}" for q in open_qs[:15]]
+        open_qs_text = (
+            "\n\nCURRENTLY OPEN QUESTIONS (check if any were just answered/resolved):\n"
+            + "\n".join(open_qs_lines)
+        )
     
     try:
         resp = openai.chat.completions.create(
@@ -725,23 +736,35 @@ def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, re
             messages=[{
                 "role": "system",
                 "content": (
-                    "Analyze this conversation exchange. Return a JSON object with two arrays:\n"
+                    "Analyze this conversation exchange. Return a JSON object with three arrays:\n"
                     "1. \"questions\": Questions or topics the user brought up that weren't fully resolved "
                     "or that would benefit from follow-up research. Only include genuine questions/curiosities, "
                     "not rhetorical ones or greetings. Be selective \u2014 only real open threads.\n"
                     "2. \"facts\": Things the user shared about themselves or taught the bot \u2014 personal details, "
                     "preferences, experiences, knowledge, corrections. These should be stored as short, "
                     "referenceable facts (e.g. \"Lives in Massachusetts\", \"Plays Diablo 3 Crusader\", "
-                    "\"Interested in UAP physics\").\n\n"
-                    "Return ONLY valid JSON. If nothing to extract, return {\"questions\": [], \"facts\": []}.\n"
+                    "\"Interested in UAP physics\").\n"
+                    "3. \"resolved\": IDs (integers) of previously open questions that were answered, "
+                    "addressed, or naturally concluded in this exchange. A question is resolved if:\n"
+                    "   - The user or Tangle provided a satisfactory answer\n"
+                    "   - The user indicated they figured it out or looked it up\n"
+                    "   - The topic reached a natural conclusion\n"
+                    "   - The user said they're no longer interested\n"
+                    "Only include IDs from the CURRENTLY OPEN QUESTIONS list below.\n\n"
+                    "Return ONLY valid JSON. If nothing to extract, return "
+                    "{\"questions\": [], \"facts\": [], \"resolved\": []}.\n"
                     "Max 2 questions and 3 facts per exchange."
                 )
             }, {
                 "role": "user",
-                "content": f"Recent context:\n{recent_text}\n\nLatest exchange:\nUser: {user_message}\nTangle: {reply}"
+                "content": (
+                    f"Recent context:\n{recent_text}\n\n"
+                    f"Latest exchange:\nUser: {user_message}\nTangle: {reply}"
+                    f"{open_qs_text}"
+                )
             }],
             temperature=0.3,
-            max_tokens=300,
+            max_tokens=400,
         )
         raw = resp.choices[0].message.content.strip()
         # Strip markdown code fences if present
@@ -751,6 +774,18 @@ def _extract_questions_and_facts(conn: sqlite3.Connection, user_message: str, re
     except Exception as e:
         log.error(f"Extraction parse error: {e}")
         return
+    
+    # Resolve questions that were answered in this exchange
+    open_q_ids = {q["id"] for q in open_qs}
+    for qid in result.get("resolved", []):
+        if isinstance(qid, int) and qid in open_q_ids:
+            conn.execute(
+                "UPDATE open_questions SET resolved_at=datetime('now'), resolution=? WHERE id=?",
+                (f"Resolved in conversation: {reply[:200]}", qid)
+            )
+            conn.commit()
+            q_text = next((q["question"] for q in open_qs if q["id"] == qid), "?")
+            log.info(f"  Resolved question #{qid}: {q_text[:60]}")
     
     # Store open questions (avoid duplicates)
     existing_qs = {q["question"].lower() for q in get_open_questions(conn)}
