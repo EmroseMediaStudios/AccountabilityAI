@@ -258,7 +258,7 @@ def process_user(db_path: Path):
         jokes = conn.execute(
             "SELECT id, callback, used_count FROM inside_jokes ORDER BY used_count, RANDOM() LIMIT 1"
         ).fetchall()
-        if jokes and random.random() < 0.20:
+        if jokes and random.random() < 0.07:  # ~7% = roughly once every 2 weeks
             joke = jokes[0]
             deliveries.append(joke["callback"])
             conn.execute(
