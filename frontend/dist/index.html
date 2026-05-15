@@ -225,41 +225,53 @@
         
         .header {
             padding: 14px 20px;
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border-bottom: 1px solid #ebe7f2;
-            display: flex; align-items: center; gap: 12px;
+            background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(248,246,252,0.95));
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-bottom: 1px solid rgba(108,92,231,0.08);
+            display: flex; align-items: center; gap: 14px;
             flex-shrink: 0;
             position: relative; z-index: 1;
         }
         
         .avatar {
-            width: 40px; height: 40px; border-radius: 12px;
+            width: 44px; height: 44px; border-radius: 14px;
             overflow: hidden;
             position: relative;
-            box-shadow: 0 2px 8px rgba(108, 92, 231, 0.12);
+            box-shadow: 0 3px 12px rgba(108, 92, 231, 0.18), 0 0 0 1.5px rgba(108,92,231,0.08);
+            background: linear-gradient(135deg, #6c5ce7, #a855f7);
+            padding: 2px;
         }
         
         .avatar img {
             width: 100%; height: 100%; object-fit: cover;
+            border-radius: 12px;
         }
         
         .status-dot {
-            position: absolute; bottom: -2px; right: -2px;
-            width: 12px; height: 12px; border-radius: 50%;
-            border: 2px solid #fff; background: #22c55e;
+            position: absolute; bottom: -1px; right: -1px;
+            width: 13px; height: 13px; border-radius: 50%;
+            border: 2.5px solid #fff; background: #22c55e;
             transition: background 0.3s;
+            box-shadow: 0 1px 4px rgba(34,197,94,0.3);
         }
-        .status-dot.away { background: #eab308; }
-        .status-dot.sleeping { background: #94a3b8; }
+        .status-dot.away { background: #eab308; box-shadow: 0 1px 4px rgba(234,179,8,0.3); }
+        .status-dot.sleeping { background: #94a3b8; box-shadow: 0 1px 4px rgba(148,163,184,0.3); }
         
         .header-info { flex: 1; }
         .header-info h1 {
-            font-size: 17px; font-weight: 700; letter-spacing: -0.3px;
+            font-size: 18px; font-weight: 800; letter-spacing: -0.4px;
             background: linear-gradient(135deg, var(--accent), var(--accent2));
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             background-clip: text;
+        }
+        .header-info h1 .ai-badge {
+            font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
+            vertical-align: super;
+            margin-left: 2px;
         }
         .header-info .status-text { font-size: 12px; color: var(--text-dim); font-weight: 500; }
         
@@ -283,15 +295,17 @@
         }
         
         .message.user {
-            align-self: flex-end; background: var(--user-bubble);
+            align-self: flex-end;
+            background: linear-gradient(135deg, #6c5ce7, #7c6cf0);
             color: white; border-bottom-right-radius: 6px;
-            box-shadow: 0 2px 12px rgba(108, 92, 231, 0.2);
+            box-shadow: 0 3px 14px rgba(108, 92, 231, 0.25);
         }
         .message.bot {
-            align-self: flex-start; background: var(--bot-bubble);
-            border: 1px solid var(--bot-border);
+            align-self: flex-start;
+            background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,246,252,0.9));
+            border: 1px solid rgba(108,92,231,0.08);
             border-bottom-left-radius: 6px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+            box-shadow: 0 2px 8px rgba(108,92,231,0.05), 0 1px 2px rgba(0,0,0,0.02);
             color: var(--text);
         }
         
@@ -355,21 +369,42 @@
         .welcome {
             flex: 1; display: flex; flex-direction: column;
             align-items: center; justify-content: center;
-            padding: 40px; text-align: center; gap: 16px;
+            padding: 40px 24px; text-align: center; gap: 20px;
             position: relative; z-index: 1;
         }
         .welcome .big-avatar {
-            width: 80px; height: 80px; border-radius: 20px;
-            overflow: hidden; box-shadow: 0 8px 32px rgba(108, 92, 231, 0.15);
+            width: 96px; height: 96px; border-radius: 24px;
+            overflow: hidden;
+            box-shadow: 0 12px 40px rgba(108, 92, 231, 0.2), 0 0 0 2px rgba(108,92,231,0.08);
+            background: linear-gradient(135deg, #6c5ce7, #a855f7);
+            padding: 3px;
         }
+        .welcome .big-avatar img { border-radius: 21px; }
         .welcome h2 {
-            font-size: 24px; font-weight: 700; letter-spacing: -0.5px;
+            font-size: 28px; font-weight: 800; letter-spacing: -0.6px;
             background: linear-gradient(135deg, var(--accent), var(--accent2));
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             background-clip: text;
         }
-        .welcome p { color: var(--text-dim); font-size: 15px; max-width: 300px; line-height: 1.6; }
-        .welcome .disclaimer { font-size: 12px; color: #9890a8; max-width: 280px; margin-top: 8px; }
+        .welcome .tagline {
+            color: var(--text); font-size: 16px; max-width: 320px; line-height: 1.6;
+            font-weight: 500;
+        }
+        .welcome .starters {
+            display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+            max-width: 400px; margin-top: 4px;
+        }
+        .welcome .starter-chip {
+            background: rgba(108,92,231,0.06); border: 1px solid rgba(108,92,231,0.12);
+            border-radius: 20px; padding: 8px 16px; font-size: 13px; color: var(--text);
+            cursor: pointer; transition: all 0.2s; font-family: inherit;
+        }
+        .welcome .starter-chip:hover {
+            background: rgba(108,92,231,0.12); border-color: rgba(108,92,231,0.25);
+            transform: translateY(-1px);
+        }
+        .welcome p { color: var(--text-dim); font-size: 14px; max-width: 300px; line-height: 1.6; }
+        .welcome .disclaimer { font-size: 11px; color: #b0a8c4; max-width: 300px; margin-top: 4px; }
         
         /* Image in messages */
         .message img.chat-image {
@@ -543,17 +578,23 @@
                 <div class="status-dot" id="statusDot"></div>
             </div>
             <div class="header-info">
-                <h1>Tangle</h1>
+                <h1>Tangle <span class="ai-badge">AI</span></h1>
                 <div class="status-text" id="statusText">online</div>
             </div>
         </div>
         <div class="messages" id="messages">
             <div class="welcome" id="welcome">
-                <div class="big-avatar"><img src="/avatar.png" style="width:100%;height:100%;border-radius:20px;object-fit:cover;"></div>
-                <h2>Hey there</h2>
-                <p>I'm not here to give you answers. I'm here to get tangled up in ideas with you.</p>
-                <p class="disclaimer">Tangle is not a therapist, doctor, or counselor. It's a thinking companion.
-                If you're in crisis, please call 988 or text HOME to 741741.</p>
+                <div class="big-avatar"><img src="/avatar.png" style="width:100%;height:100%;border-radius:21px;object-fit:cover;"></div>
+                <h2>Tangle AI</h2>
+                <p class="tagline">Not here to give you answers — here to get tangled up in ideas with you.</p>
+                <div class="starters">
+                    <button class="starter-chip" onclick="useStarter(this)">What should I learn next? 🧠</button>
+                    <button class="starter-chip" onclick="useStarter(this)">Explain something I've been curious about</button>
+                    <button class="starter-chip" onclick="useStarter(this)">Let's debate something fun 🔥</button>
+                    <button class="starter-chip" onclick="useStarter(this)">I need to think through a decision</button>
+                </div>
+                <p class="disclaimer">Tangle is a thinking companion, not a therapist or doctor.<br>
+                In crisis? Call 988 or text HOME to 741741.</p>
             </div>
         </div>
         <div class="typing" id="typing"><span></span><span></span><span></span></div>
@@ -985,6 +1026,14 @@
                 }
             }
         });
+        
+        // ---- Starter chips ----
+        function useStarter(el) {
+            inputEl.value = el.textContent.trim();
+            inputEl.focus();
+            updateSendBtn();
+            sendMessage();
+        }
         
         // ---- Init ----
         checkAuth();
